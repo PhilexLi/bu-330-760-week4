@@ -1,18 +1,28 @@
 """Math agent that solves questions using tools in a ReAct loop."""
 
 import json
+import os
+import sys
+import time
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 from dotenv import load_dotenv
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from calculator import calculate
 
 load_dotenv()
 
-# Configure your model below. Examples:
-#   "google-gla:gemini-2.5-flash"       (needs GOOGLE_API_KEY)
-#   "openai:gpt-4o-mini"                (needs OPENAI_API_KEY)
-#   "anthropic:claude-sonnet-4-6"    (needs ANTHROPIC_API_KEY)
-MODEL = "google-gla:gemini-2.5-flash"
+# Qwen via DashScope OpenAI-compatible API
+MODEL = OpenAIChatModel(
+    "qwen-plus",
+    provider=OpenAIProvider(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key=os.environ["DASHSCOPE_API_KEY"],
+    ),
+)
 
 agent = Agent(
     MODEL,
@@ -34,19 +44,16 @@ def calculator_tool(expression: str) -> str:
     return calculate(expression)
 
 
-# TODO: Implement this tool by uncommenting the code below and replacing
-# the ... with your implementation. The tool should:
-#   1. Read products.json using json.load() (json is already imported above)
-#   2. If the product_name is in the catalog, return its price as a string
-#   3. If not found, return the list of available product names so the agent
-#      can try again with the correct name
-#
-# @agent.tool_plain
-# def product_lookup(product_name: str) -> str:
-#     """Look up the price of a product by name.
-#     Use this when a question asks about product prices from the catalog.
-#     """
-#     ...
+@agent.tool_plain
+def product_lookup(product_name: str) -> str:
+    """Look up the price of a product by name.
+    Use this when a question asks about product prices from the catalog.
+    """
+    with open("products.json") as f:
+        products = json.load(f)
+    if product_name in products:
+        return str(products[product_name])
+    return f"Product '{product_name}' not found. Available products: {list(products.keys())}"
 
 
 def load_questions(path: str = "math_questions.md") -> list[str]:
@@ -60,13 +67,33 @@ def load_questions(path: str = "math_questions.md") -> list[str]:
     return questions
 
 
+def run_with_retry(question: str, max_retries: int = 5):
+    """Run the agent, retrying on rate-limit or connection errors."""
+    for attempt in range(max_retries):
+        try:
+            return agent.run_sync(question)
+        except Exception as e:
+            msg = str(e)
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                wait = 60
+                print(f"  [Rate limit hit, waiting {wait}s before retry...]\n")
+                time.sleep(wait)
+            elif "Connection error" in msg or "getaddrinfo" in msg or "ConnectError" in msg:
+                wait = 10
+                print(f"  [Network error, waiting {wait}s before retry...]\n")
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError(f"Failed after {max_retries} retries")
+
+
 def main():
     questions = load_questions()
     for i, question in enumerate(questions, 1):
         print(f"## Question {i}")
         print(f"> {question}\n")
 
-        result = agent.run_sync(question)
+        result = run_with_retry(question)
 
         print("### Trace")
         for message in result.all_messages():
@@ -83,6 +110,7 @@ def main():
 
         print(f"\n**Answer:** {result.output}\n")
         print("---\n")
+        time.sleep(60)
 
 
 if __name__ == "__main__":
