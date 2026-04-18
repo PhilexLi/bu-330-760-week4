@@ -33,3 +33,7 @@ The agent will work through each question in `math_questions.md` and print the R
 - `products.json` - product catalog with prices
 - `math_questions.md` - the questions the agent solves
 - `.env.example` - template for your API key
+
+## Walkthrough Video
+
+https://youtu.be/o0ny6RW4oc8
